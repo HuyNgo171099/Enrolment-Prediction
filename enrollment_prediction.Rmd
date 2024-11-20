@@ -1,0 +1,670 @@
+---
+title: "Enrollment_Prediction"
+author: "Huy"
+date: "2024-11-01"
+output: html_document
+---
+
+# I. Installing All The Necessary Libraries
+
+I first install and load the necessary libraries. These libraries are used for various purposes such as data manipulation, visualization, and building machine learning models:
+
+- tidymodels: for building and tuning machine learning models.
+- tidyverse: a collection of R packages for data manipulation and visualization.
+- skimr: provides descriptive statistics in a clean and readable format.
+- corrplot: for visualizing correlation matrices. 
+- GGally: extends ggplot2 with additional visualization options. 
+- themis: addresses class imbalance in datasets.
+- rpart.plot: visualizes decision trees.
+- xgboost: for gradient boosting machine learning models.
+- lubridate: simplifies date and time manipulations.
+- ggridges: creates ridge plots for data visualization.
+- DescTools: provides additional descriptive statistics functions.
+- NbClust: for cluster analysis.
+- ggdendro: visualizes hierarchical clustering results.
+- klaR: for classification tasks.
+- glmnet: implements regularized regression techniques (LASSO, Ridge).
+- doParallel: enables parallel processing.
+- ranger: implements random forests efficiently.
+
+```{r}
+#install.packages("tidymodels")
+library(tidymodels)
+
+#install.packages("tidyverse")
+library(tidyverse)
+
+#install.packages("skimr")
+library(skimr)
+
+#install.packages("corrplot")
+library(corrplot)
+
+#install.packages("GGally")
+library(GGally)
+
+#install.packages("themis")
+library(themis)
+
+#install.packages("rpart.plot")
+library(rpart.plot)
+
+#install.packages("xgboost")
+library(xgboost)
+
+#install.packages("lubridate")
+library(lubridate)
+
+#install.packages("ggridges")
+library(ggridges)
+
+#install.packages("DescTools")
+library(DescTools)
+
+#install.packages("NbClust")
+library(NbClust)
+
+#install.packages("ggdendro")
+library(ggdendro)
+
+#install.packages("klaR")
+library(klaR)
+
+#install.packages("glmnet")
+library(glmnet)
+
+#install.packages("doParallel")
+library(doParallel)
+
+#install.packages("ranger")
+library(ranger)
+```
+
+# II. Loading The Dataset and Pre-built Functions
+
+```{r}
+# load the censored dataset and helper functions
+load("./offers_censored.RData")
+source("./helpful_functions.R")
+```
+
+```{r}
+# display the first few rows of the censored dataset
+head(offers)
+```
+
+# III. Analysis, Assessment, Final Training, and Prediction Sets
+
+## Final Training Set and Prediction Set
+
+The prediction set includes AY2023 observations that were available before 2023-03-15. 
+On the other hand, the final training set includes all of observations from AY2020-AY2022. 
+
+```{r}
+# define a function to summarize the contents of a dataset
+years_and_max_dates <- function(x) {
+  x |>
+    group_by(AppYear) |>
+    summarise(
+      `Num observations` = n(),
+      `Max \`AppDate\`` = max(AppDate),
+      `Max \`OfferDate\`` = max(OfferDate),
+      `Max \`ResponseDate\`` = max(ResponseDate, na.rm = TRUE),
+      `\`ResponseDate\` is NA` = sum(is.na(ResponseDate))
+    )
+}
+```
+
+```{r}
+# set the seed number so that the results are reproducible
+set.seed(420)
+
+# define a function to make the final training and prediction split
+final_training_prediction_split <-
+  offers |>
+  make_appyear_split(test_year = 2023)
+
+# extract the final training dataset
+offers_final_training <- training(final_training_prediction_split)
+
+# extract the prediction dataset
+offers_prediction <- testing(final_training_prediction_split)
+```
+
+```{r}
+# inspect the final_training set
+offers_final_training |> years_and_max_dates()
+```
+
+```{r}
+# inspect the prediction set
+offers_prediction |> years_and_max_dates()
+```
+
+From the inspection, I can confirm that:
+
+- The final training set contains all observations from AY2020 to AY2022.
+- The prediction set contains observations from AY2023 available before 2023-03-15. 
+
+## Analysis Set and Assessment Set
+
+The analysis set includes all of observations from AY2020-AY2021. 
+However, the assessment set includes only AY2022 observations that were available before 2022-03-15.
+
+```{r}
+# set the seed number so that the results are reproducible
+set.seed(420)
+
+# define a function to make the analysis and assessment split
+analysis_assessment_split <-
+  offers |>
+  filter(AppYear <= 2022) |>
+  censor_post_prediction_responses(years = 2022) |>
+  drop_post_prediction_offers(years = 2022) |>
+  make_appyear_split(test_year = 2022)
+
+# extract the analysis dataset
+offers_analysis <- training(analysis_assessment_split)
+
+# extract the assessment dataset
+offers_assessment <- testing(analysis_assessment_split)
+```
+
+```{r}
+# inspect the analysis set
+offers_analysis |> years_and_max_dates()
+```
+
+```{r}
+# inspect the assessment set
+offers_assessment |> years_and_max_dates()
+```
+
+From the inspection, I can confirm that:
+
+- The analysis set includes all of observations from AY2020 to AY2021.
+- The assessment set includes observations from AY2022 available before 2022-03-15.
+
+# IV. Data Exploration
+
+I conduct Exploratory Data Analysis (EDA) to help me understand the datasets and their characteristics. I start by using the skimr package to generate summary statistics for the analysis set. 
+
+```{r}
+skim(offers_analysis)
+```
+
+The dependent variable is Status, which is a categorical variable with two categories "Enrolled" and "Not enrolled". Therefore, it is important to check if the variable is balanced or not. That is, the number of observations with the category "Enrolled" is not significantly lower or higher than the number of observations with the category "Not enrolled".
+
+```{r}
+offers_analysis |>
+  group_by(Status) |>
+  count()
+```
+
+It seems that:
+
+- Around 74% of observations fall into the "Enrolled" category while 26% of observations fall into the "Not enrolled" category. 
+- This class imbalance will be addressed using downsampling during the model training phase. 
+
+Next, I visualize the relationship between some of the independent variables with the dependent variable Status. 
+
+```{r}
+# Status and Response
+ggplot(offers_analysis, aes(x = Response, fill = Status)) +
+  geom_bar(position = "dodge", stat = "count") +
+  labs(title = "Distribution of Status per Response Category",
+       x = "Response",
+       y = "Count")
+
+# Status and Demo1
+ggplot(offers_analysis, aes(x = Demo1, fill = Status)) +
+  geom_bar(position = "dodge", stat = "count") +
+  labs(title = "Distribution of Status per Demo1 Category",
+       x = "Demo1",
+       y = "Count")
+
+# Status and Demo2
+ggplot(offers_analysis, aes(x = Demo2, fill = Status)) +
+  geom_bar(position = "dodge", stat = "count") +
+  labs(title = "Distribution of Status per Demo2 Category",
+       x = "Demo2",
+       y = "Count")
+
+# Status and App2
+ggplot(offers_analysis, aes(x = App2, fill = Status)) +
+  geom_bar(position = "fill", stat = "count") +
+  labs(x = "App2",
+       y = "Proportion")
+```
+
+# V. Machine Learning Model I: LASSO Regression
+
+In this section, I train a LASSO model. There is always a bias-variance trade-off associated with the choice of k in k-fold cross-validation. It is quite common that k is set to either 5 or 10 since these values have been shown empirically to yield test error rate estimates that suffer neither from excessively high bias nor from very high variance. In this case, I set k to 10. Also, I have chosen a set of metrics that I am interested in, including F1 score, ROC_AUC, precision, sensitivity, and specificity. 
+
+```{r}
+# set the seed number so that the results are reproducible
+set.seed(420)
+
+# 10-folds cross-validation
+cv_folds <- vfold_cv(offers_analysis, v = 10, strata = "Status")
+
+# specify the metrics of interest
+class_metrics <- metric_set(f_meas, roc_auc, sensitivity, specificity)
+```
+
+## 1. The Recipe
+
+I first need to define the recipe for the LASSO model. The components of the recipe include: 
+
+- recipe(Status ~ ., data = offers_analysis): The dependent variable is Status. The dot . means that the rest of the variables are selected as the independent variables. Since I am training the model so I will be using the analysis set (a more traditional name is the training set). 
+- update_role(AppYear, AppDate, OfferDate, ResponseDate, new_role = "metadata"): Some variables might not be that important so I remove them out of the recipe by changing their role to metadata. 
+- step_dummy(all_nominal_predictors()): Subsequently, I convert all nominal variables to dummy variable.
+- step_normalize(all_predictors()): I normalize all of the variables so that they have mean 0 and standard deviation 1. 
+- step_downsample(Status): As I have discovered during the EDA, the dependent variable is imbalanced. Therefore, to address this issue, I use the downsampling method to downsample the majority class ("Enrolled") to match the size of the minority class ("Not enrolled"). The obvious drawback of this method is that I am only using a portion of the analysis dataset.  
+
+```{r}
+# define the recipe
+lasso_recipe <-
+  recipe(Status ~ ., data = offers_analysis) |>
+  # remove the variables that will not be used
+  update_role(AppYear, AppDate, OfferDate, ResponseDate, new_role = "metadata") |>
+  # convert all nominal variables to dummy variables
+  step_dummy(all_nominal_predictors()) |>
+  step_zv(all_predictors()) |>
+  # normalize the variables to have mean 0 and standard deviation 1
+  step_normalize(all_predictors()) |>
+  # downsample to balance the classes in the dependent variable
+  step_downsample(Status)
+```
+
+## 2. The Model and The Workflow
+
+The components of the model include:
+
+- penalty = tune(): This setting means that the penalty term, which is a hyperparameter, is to be optimized by R during tuning.
+- mixture = 1: This setting means that I am using a logistic regression model with LASSO regularization. 
+
+The workflow combines the recipe (lasso_recipe) and the model (lasso_model) into a unified pipeline for streamlined training and evaluation.  
+
+```{r}
+lasso_model <-
+  logistic_reg(penalty = tune(), mixture = 1) |>
+  set_engine("glmnet")
+
+lasso_workflow <-
+  workflow() |>
+  add_recipe(lasso_recipe) |>
+  add_model(lasso_model)
+```
+
+## 3. The Tuning Grid
+
+LASSO regression is a regularization technique that applies a penalty to prevent overfitting. I have set up a grid consisting of 50 different values for the penalty term.
+
+- penalty(c(-3, -1), trans = log10_trans()): specifies the range for the penalty term (or lambda) on a log10 scale.
+- levels = 30: divides the range into 30 levels for testing. 
+
+```{r}
+grid_lasso <- grid_regular(penalty(c(-3, -1), trans = log10_trans()), 
+                           levels = 30)
+grid_lasso
+```
+
+## 4. Model Tunning
+
+I now tune the LASSO model. I perform 10-fold cross-validation (cv_folds) to evaluate the different penalty values. Also, I assess the model performance by using the metrics specified in the variable class_metrics, including F1 score, ROC_AUC, precision, sensitivity, and specificity.
+
+```{r}
+# set the seed number so that the results are reproducible
+set.seed(420)
+
+lasso_tune <-
+  lasso_workflow |>
+  tune_grid(
+    resamples = cv_folds,
+    grid = grid_lasso,
+    metrics = class_metrics)
+```
+
+## 5. Plot The Results
+
+I visualize the performance metrics against the penalty values. This helps me identify the optimal penalty value where the model performs best. 
+
+- F1 Score: The F-measure starts lower and improves as the amount of regularization increases, peaking before leveling off. This suggests the model balances precision and recall better with moderate regularization. 
+- ROC_AUC: The ROC_AUC remains relatively stable and high across most regularization values. It starts to decline slightly at higher levels of regularization. 
+- Sensitivity: Sensitivity improves steadily as regularization increases, peaking around moderate values of regularization. At very high regularization, sensitivity drops slightly, indicating the model loses its ability to correctly identify positive cases.  
+- Specificity: Specificity decreases steadily as regularization increases, suggesting the model starts misclassifying negative cases more frequently as regularization increases. 
+
+```{r}
+lasso_tune |>
+  autoplot() +
+  theme_bw()
+```
+
+## 6. Collect The Metrics
+
+I use the function collect_metrics() to extract the performance metrics for all combinations of penalty values tested during tuning. My main metric of interest is the F1 score as it balances precision and recall. Therefore, I also create a plot of the F1 score with confidence intervals for each penalty value. The function scale_x_log10() displays the penalty on a logarithmic scale. 
+
+```{r}
+# collect the metrics
+lasso_tune_metrics <-
+  lasso_tune |>
+  collect_metrics()
+
+# plot the f_meas
+lasso_tune_metrics |>
+  filter(.metric == "f_meas") |>
+  ggplot(aes(
+    x = penalty, y = mean,
+    ymin = mean - std_err, ymax = mean + std_err
+  )) +
+  geom_pointrange(alpha = 0.5, size = .125) +
+  scale_x_log10() +
+  labs(y = "f_meas", x = expression(lambda)) +
+  theme_bw()
+```
+
+## 7. Show The Best Models
+
+I inspect the best LASSO models using the F1 score. Earlier (in section 6), when I plot the performance metric against the penalty values, I discover that moderate levels of regularization seem to achieve the best balance across all the metrics and that the optimal amount of regularization lies in the range where the F1 score and Sensitivity are maximized without causing a significant drop in Specificity and ROC_AUC. The penalty range of the five best models (0.01487 to 0.02807) seems plausible. This is because when I eyeball the plot in section six, I expect the optimal penalty range to be somewhere between 0.015 and 0.03.  
+
+```{r}
+lasso_tune |>
+  show_best(metric = "f_meas")
+```
+
+## 8. Choose The Best Model and Finalize The Workflow
+
+I choose the best model using the one standard error rule. Subsequently, I combine the best model and the recipe into a finalized workflow for deployment. 
+
+```{r}
+lasso_1se_model <-
+  lasso_tune |>
+  select_by_one_std_err(metric = "f_meas", desc(penalty))
+
+lasso_1se_model
+
+lasso_workflow_tuned <-
+  lasso_workflow |>
+  finalize_workflow(lasso_1se_model)
+
+lasso_workflow_tuned
+```
+
+## 9. Evaluate The Model On The Assessment Set
+
+Finally, I fit the finalized workflow on the full analysis set and evaluate it on the assessment set. The F1 score is the main metric of interest because it balances precision and recall, making it particularly useful when the class distribution is imbalanced. The value of the F1 score is 96.83%. This high value suggests that the model performs well in identifying both enrolled and not-enrolled cases without over-emphasizing either precision or recall. 
+
+It can also be seen that the model has high values for Sensitivity, Specificity, and ROC_AUC. The high Sensitivity indicates that most enrolled students are accurately classified. The high Specificity demonstrates that the model rarely misclassifies students as enrolled when they are not. Finally, the high ROC_AUC indicates that the model has excellent discriminatory power. 
+
+
+```{r}
+# fit the model to the entire analysis set and evaluate the model on the assessment set
+lasso_last_fit <-
+  lasso_workflow_tuned |>
+  last_fit(analysis_assessment_split, metrics = class_metrics)
+
+# collect the metrics on the assessment set
+lasso_test_metrics <-
+  lasso_last_fit |>
+  collect_metrics()
+
+lasso_test_metrics
+```
+
+# V. Machine Learning Model II: Random Forest
+
+In this section, I train a Random Forest model. Random Forest is an ensemble learning method that uses multiple decision trees and aggregates their results to improve predictive accuracy and control overfitting. This model uses the same cross-validation folds (cv_folds) and performance metrics (class_metrics) as the LASSO model.
+
+## 1. The Recipe
+
+The components of the recipe include:
+
+- recipe(Status ~ ., data = offers_analysis): The dependent variable is Status. The dot . means that the rest of the variables are selected as the independent variables. Since I am training the model so I will be using the analysis set (a more traditional name is the training set). 
+- update_role(AppDate, OfferDate, AppYear, ResponseDate, HowFirstHeard, new_role = "metadata"): Some variables might not be that important so I remove them out of the recipe by changing their role to metadata. 
+
+```{r}
+rf_recipe <-
+  recipe(Status ~ ., data = offers_analysis) |>
+  update_role(AppDate, OfferDate, AppYear, ResponseDate, HowFirstHeard, new_role = "metadata")
+```
+
+## 2. The Model and The Workflow
+
+The components of the model include:
+
+- mtry = tune(): The number of variables to consider for splitting at each node. This hyperparameter is to be tuned by R. 
+- trees = 50: The number of trees. 
+- rand_forest(): Specifies a Random Forest model.
+- set_mode("classification"): Sets the model's objective as classification.
+- set_engine("ranger", importance = "permutation"): Uses the ranger package for efficient Random Forest implementation and computes variable importance using permutation. 
+
+The workflow integrates the recipe (rf_recipe) and the model (rf_model_tune). 
+
+```{r}
+rf_model_tune <-
+  rand_forest(mtry = tune(), trees = 50) |>
+  set_mode("classification") |>
+  set_engine("ranger", importance = "permutation")
+
+rf_tune_wf <-
+  workflow() |>
+  add_recipe(rf_recipe) |>
+  add_model(rf_model_tune)
+```
+
+## 3. The Tuning Grid
+
+A tuning grid is defined for the mtry hyperparameter which controls the number of variables considered at each tree split. In this case, I create a grid with 12 equally spaced values for mtry ranging from 1 to 12. This grid will be used for hyperparameter tuning during cross_validation. 
+
+```{r}
+rf_tune_grid <- grid_regular(mtry(range = c(1, 12)), levels = 12)
+rf_tune_grid
+```
+
+## 4. Model Tunning
+
+The model is tuned to find the optimal value of mtry using cross_validation. Also, I assess the model performance by using the metrics specified in the variable class_metrics, including F1 score, ROC_AUC, precision, sensitivity, and specificity.
+
+```{r}
+num_cores <- parallel::detectCores()
+num_cores
+
+doParallel::registerDoParallel(cores = num_cores - 1L)
+
+set.seed(420)
+rf_tune_res <- tune_grid(
+  rf_tune_wf,
+  resamples = cv_folds,
+  grid = rf_tune_grid,
+  metrics = class_metrics)
+```
+
+## 5. Show The Best Models
+
+For each of the metrics (F1 score, Sensitivity, and Specificity), the five best models are identified. 
+
+- By Sensitivity: Shows the models with the highest ability to correctly identify positive cases (enrolled students).
+- By Specificity: Shows the models with the highest ability to correctly identify negative cases (not enrolled students).
+- By F1 score: Shows the models with the highest ability to correctly identify both the positive and negative cases (balance precision and recall). 
+
+```{r}
+# by f1 score
+rf_tune_res |>
+  show_best(metric = "f_meas", n = 5) |>
+  arrange(desc(mtry))
+
+# by sensitivity
+rf_tune_res |>
+  show_best(metric = "sensitivity", n = 5) |>
+  arrange(desc(mtry))
+
+# by specificity
+rf_tune_res |>
+  show_best(metric = "specificity", n = 5) |>
+  arrange(desc(mtry))
+```
+
+## 6. Plot The Results
+
+The F1 score starts lower at very small values of mtry and stabilizes at higher values of mtry (around 3 or more). This indicates that using too few predictors (mtry) results in suboptimal model performance. 
+
+Sensitivity is highest when mtry is small but decreases steadily as mtry increases. A small mtry allows the model to better identify true positives (enrolled students). However, increasing mtry reduces Sensitivity, likely because the trees become less flexible in capturing positive cases.
+
+Specificity is lowest for very small mtry values but improves rapidly and stabilizes at higher values of mtry. A low mtry results in many false positives, leading to lower Specificity. Increasing mtry improves the model's ability to correctly identify true negatives (students not enrolled).
+
+The error bars represent the variability (standard error) of each metric across cross-validation folds. The error bars for Sensitivity are slightly wider for larger mtry values, indicating more variability in the model's ability to capture true positives at those settings. F1 score and Specificity have relatively small error bars, suggesting consistent performance across folds.
+
+A value of mtry between 2 and 4 seems to strike a good balance between all metrics, as the F1 score is stable, Sensitivity is reasonably high, and Specificity is maximized.
+
+```{r}
+rf_tune_res |>
+  collect_metrics() |>
+  filter(.metric %in% c("specificity", "f_meas", "sensitivity")) |>
+  ggplot(aes(
+    x = mtry, y = mean, ymin = mean - std_err,
+    ymax = mean + std_err, colour = .metric
+  )) +
+  geom_errorbar() +
+  geom_line() +
+  geom_point() +
+  scale_colour_manual(values = c("#D55E00", "#0072B2", "#009E73")) +
+  facet_wrap(~.metric, ncol = 1, scales = "free_y") +
+  guides(colour = "none") +
+  theme_bw()
+```
+
+## 7. Choose The Best Model and Finalize The Workflow
+
+I choose the best model using the F1 score. Subsequently, I combine the best model and the recipe into a finalized workflow for deployment. As expected, the best model has a value of 2 for mtry. 
+
+```{r}
+best_rf <- select_best(rf_tune_res, metric = "f_meas")
+
+rf_workflow_tuned <-
+  rf_tune_wf |>
+  finalize_workflow(best_rf)
+
+rf_workflow_tuned
+```
+
+## 8. Evaluate The Model On The Assessment Set
+
+Finally, I fit the finalized workflow on the full analysis set and evaluate it on the assessment set. The F1 score is the main metric of interest because it balances precision and recall, making it particularly useful when the class distribution is imbalanced. The value of the F1 score is 96.72%. This high value suggests that the model performs well in identifying both enrolled and not-enrolled cases without over-emphasizing either precision or recall. 
+
+It can also be seen that the model has high values for Sensitivity, Specificity, and ROC_AUC. The high Sensitivity indicates that most enrolled students are accurately classified. The high Specificity demonstrates that the model rarely misclassifies students as enrolled when they are not. Finally, the high ROC_AUC indicates that the model has excellent discriminatory power. 
+
+```{r}
+# fit the model to the entire analysis set and evaluate the model on the assessment set
+rf_final_fit <-
+  rf_workflow_tuned |>
+  last_fit(analysis_assessment_split, metrics = class_metrics)
+
+# collect the metrics on the assessment set
+rf_test_results <-
+  rf_final_fit |>
+  collect_metrics()
+
+rf_test_results
+```
+
+# VI. Evaluation Of The Performance Of The Two Models On The Assessment Set
+
+```{r}
+lasso_test_metrics
+```
+
+```{r}
+rf_test_results
+```
+
+After tuning the LASSO model and the Random Forest model using the analysis set and evaluate them using the assessment set, I will now compare the results of the two models. It can be seen that the LASSO model has a slightly higher F1 score, Sensitivity, and Specificity. Therefore, I will choose the LASSO model.
+
+Next, I fit the finalized workflow of the LASSO model on the final training set and evaluate it on the censored prediction set. The warnings “No event observations were detected in truth with event level ‘Enrolled’” and “There were issues with some computations” are expected, and occur only because the value of Status has been set to NA for AY2023 (this is because I am using the censored prediction set). 
+
+```{r}
+metric <- metric_set(roc_auc)
+
+final_model <-
+  lasso_workflow_tuned |>
+  last_fit(final_training_prediction_split, metrics = metric)
+```
+
+Having fit the final model, I need to generate predictions for each program, specifically:
+
+- 1. The total number of students (among the offers sent prior to March 15, 2023) who will attend (hard predictions), and
+- 2. The average probability (among the offers sent prior to March 15, 2023) of enrollment (soft prediction).
+
+I use a decision threshold of 0.5 for the hard predictions. 
+
+```{r}
+final_model |>
+  augment() |>
+  group_by(Program) |>
+  summarise(
+    Predicted_N = sum(.pred_Enrolled >= .5),
+    Predicted_Prob = mean(.pred_Enrolled)
+  )
+```
+
+# VII. Compare The Predicted Results With The Actual Results
+
+I now load the uncensored dataset, which contains the actual values for the Status column for AY2023 observations
+
+```{r}
+# load the uncensored dataset 
+load("./offers_uncensored.RData")
+```
+
+Again, I create the final training set and the prediction set. The prediction set includes AY2023 observations that were available before 2023-03-15. On the other hand, the final training set includes all of observations from AY2020-AY2022.
+
+```{r}
+set.seed(420)
+final_training_prediction_split <-
+  offers |>
+  make_appyear_split(test_year = 2023)
+
+training(final_training_prediction_split) |> years_and_max_dates()
+testing(final_training_prediction_split) |> years_and_max_dates()
+
+offers_final_training <- training(final_training_prediction_split)
+offers_prediction <- testing(final_training_prediction_split)
+```
+
+Next, I fit the finalized workflow of the LASSO model on the final training set and evaluate it on the uncensored prediction set.
+
+```{r}
+final_model_uncensored <-
+  lasso_workflow_tuned |>
+  last_fit(final_training_prediction_split, metrics = class_metrics)
+```
+
+I compare the predicted Status with the actual Status for each observation. 
+
+```{r}
+final_model_uncensored_aug <-
+  final_model_uncensored |>
+  augment()
+final_model_uncensored_aug
+```
+
+I find the F1 score of the model. The value of the F1 score is 98.46%. This high value suggests that the model performs well in identifying both enrolled and not-enrolled cases without over-emphasizing either precision or recall.
+
+Also, I create two confusion matrices. The first one has a decision threshold of 0.5 while the second one has a decision threshold of 0.65. In both cases, the results are the same. The model misclassifies only 1 not enrolled case and 40 enrolled cases. 
+
+```{r}
+# find the F1_score
+primary_metric <- metric_set(f_meas)
+final_model_uncensored_aug |>
+  primary_metric(truth = Status, estimate = .pred_class)
+
+# create the confusion matrix (threshold 0.5)
+final_model_uncensored_aug |>
+  conf_mat(truth = Status, estimate = .pred_class)
+
+# create the confusion matrix (threshold 0.65)
+final_model_uncensored_aug |>
+  mutate(.pred_class_65 = factor(ifelse(.pred_Enrolled >= 0.65, "Enrolled", "Not enrolled"))) |>
+  conf_mat(truth = Status, estimate = .pred_class_65)
+```
+
