@@ -21,7 +21,7 @@ The data are stored in a data frame called `offers`, which can be accessed by lo
 Each row describes a single offer of admission for a particular academic year. An applicant receives at most one offer of admission each year, so within a given academic year, each offer describes a different person. The following table describes the columns in `offers`:
 
 | **Variable** | **Type** | **Description** |
-| :----------- | :------: | :-------------: |
+| :----------- | :------: | :------------- |
 | `Status`     | factor   | Target variable. Binary indicator of whether the student eventually enrolled in the program based on information from OSIRIS. Classes: `Enrolled` (positive class), `Not enrolled`. For `AppYear == 2023` (the prediction year), `Status` is set to `NA` to prevent data leakage. |
 | `AppYear`    | integer  | The academic year for the application and offer of admission. 2020 = academic year 2020/21, etc. Values are 2020…2023. |
 | `Program`    | factor   | The MSc program in which the student was offered a spot. Pre-masters programs, MSc programs with capped enrollment, and one program with data integrity issues (due to a name change for the program) have been excluded. |
@@ -40,9 +40,9 @@ Predictions for enrollment in academic year 2023/24 (hereafter referred to as AY
 
 - Applications received, and offers sent *after* 2023-03-14 have been dropped.
 - Observations for which the student’s response was received *after* 2023-03-14 have been censored:
-    -- The value of `ResponseDate` is set to `NA`
-    -- The value of `Response` is set to `Unknown`
-- `Status` is set to `NA` for all observations with `AppYear == 2023`. Note that after you submit your final predictions, you will gain access to a new data set in which the `Status` variable has not been censored.
+    --    The value of `ResponseDate` is set to `NA`
+    --    The value of `Response` is set to `Unknown`
+- `Status` is set to `NA` for all observations with `AppYear == 2023`.
 
 The result of censoring and dropping observations in AY2023 can be seen in this summary:
 
