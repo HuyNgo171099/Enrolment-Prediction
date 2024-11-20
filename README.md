@@ -88,5 +88,4 @@ Predictions are made on March 15 for offers sent out before March 15. If student
 
 ## Project Details
 
-To see the details of the project (the code, the explanations, and the results), please check the HTML file `enrollment_prediction.html`. 
-
+To see the details of the project (the code, the explanations, and the results), please visit `https://huyngo171099.github.io/Enrolment-Prediction/enrollment_prediction.html`.
