@@ -88,5 +88,5 @@ Predictions are made on March 15 for offers sent out before March 15. If student
 
 ## Project Details
 
-To see the details of the project (the code, the explanations, and the results), please check the markdown file `enrollment_prediction.Rmd`. 
+To see the details of the project (the code, the explanations, and the results), please check the HTML file `enrollment_prediction.html`. 
 
