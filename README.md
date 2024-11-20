@@ -40,8 +40,8 @@ Predictions for enrollment in academic year 2023/24 (hereafter referred to as AY
 
 - Applications received, and offers sent *after* 2023-03-14 have been dropped.
 - Observations for which the student’s response was received *after* 2023-03-14 have been censored:
-    --    The value of `ResponseDate` is set to `NA`
-    --    The value of `Response` is set to `Unknown`
+    -    The value of `ResponseDate` is set to `NA`
+    -    The value of `Response` is set to `Unknown`
 - `Status` is set to `NA` for all observations with `AppYear == 2023`.
 
 The result of censoring and dropping observations in AY2023 can be seen in this summary:
